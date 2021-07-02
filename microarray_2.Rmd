@@ -1,0 +1,127 @@
+---
+title: "Replication of Microarray Analysis of BK Virus in Kidney Transplant Biopsies 2"
+author: "Conor O'Donoghue"
+date: "10/19/2020"
+output: 
+  html_document:
+     theme: united
+     toc: yes
+  pdf_document:
+    toc:yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+Get to the same point in the analysis as last time
+
+```{r message=FALSE}
+library(oligo)
+library(pd.hugene.1.0.st.v1)
+library(hugene10sttranscriptcluster.db)
+library(limma)
+library(gplots)
+```
+
+```{r load data}
+pd <- read.AnnotatedDataFrame("~/BKV/pData.txt")
+celfiles <- paste('./', rownames(pd), sep="")
+rawData <- read.celfiles(celfiles, phenoData=pd)
+normData <- rma(rawData, target="core")
+```
+
+
+```{r get annotations}
+head(featureData(normData))
+featureData(normData) <- getNetAffx(normData, "transcript")
+head(featureData(normData))
+geneData <- normData[fData(normData)[,"category"] %in% "main",]
+```
+
+
+```{r QC plots}
+lab <- paste(pd$sampleID, pd$studyGroup)
+boxplot(rawData, target='core', main='Raw Data', ylab="log2(exprs)", names=lab, las=2)
+boxplot(geneData, main='Norm Data', ylab="log2(exprs)", names=lab, las=2)
+
+hist(geneData, main="Normalized expression density")
+
+heatmap.2(cor(exprs(geneData))^2, trace='none', scale='none', margins=c(9,9), labRow=lab, labCol=lab)
+
+colors <- as.numeric(factor(pd$studyGroup))+1
+plotMDS(geneData, labels=lab, col=colors)
+```
+
+# Exercise 2 -- limma
+
+## Defining the design matrix
+
+define the design matrix and calculate the array weights for the linear modeling, as per the lecture notes. How would you modify the following code chunk for three sample groups?
+
+```{r linear modelling}
+# create a design matrix for group-means model
+# pd had study groups as G1 or G2.
+# We want to change this to 0 or 1.
+# So use pd$studyGroup==G1 to get "TRUE" for G1 values and "FALSE" for G2
+# and then use as.numeric() to turn the bools into 0s and 1s.
+design <- cbind(
+  G1=as.numeric(pd$studyGroup=="G1"),
+  G2=as.numeric(pd$studyGroup=="G2")
+)
+
+# calculate array weights and visualize with barplot, then fit linear model
+# arrayWeights() is a limma function that estimates relative weights for each array
+# Since we have 6 samples, 3 for each group, we have 6 arrays and 6 weights.
+# Then lmFit takes our gene expression data, design matrix, and weight array to fit our linear model.
+aw <- arrayWeights(geneData, design)
+barplot(aw)
+fit <- lmFit(geneData, design, weight=aw)
+
+# Make a contrasts matrix for the sample comparisons we want to make and do the comparison
+# using designs, want to do G2-G1
+cm <- makeContrasts(G2-G1, levels=design)
+fit2 <- contrasts.fit(fit,cm)
+fit3 <- eBayes(fit2)
+```
+
+## identifying top genes
+Now that linear modeling is done, we use topTable to get the top n genes for our comparison of interest. After getting our topTable, we filter the genes on adjusted p-value and logFC. We want significantly expressed genes with a LFC of at least 1 or less than -1 (so abs(logFC) >= 1). 
+
+Note that topTable only includes the gene identifier and statistical results, so if we want to *plot* the expression values, we need to extract the filtered topTable IDs from the full geneData expression matrix.
+
+```{r write DEG_list}
+# create the top table for the comparison (coef) we want
+# top n=all genes by making n the number of rows in fit2.
+# coef is column number/name of interest. We want column 1, not column 0. 
+top <- topTable(fit3, coef=1, n=nrow(fit3))
+sig <- top[top$adj.P.Val <= 0.05 & abs(top$logFC) >=1,]
+
+# Create an excel-readable table with the specified columns for sig gene only
+# Note that we could subset out only the columns of interest if required
+write.table(sig, "DEG_list.csv", sep='\t', row.names=FALSE)
+
+# Extract the expression values for the DEGs
+e <- exprs(geneData)
+# With the below line, we're selecting the row if the rowname is in our table of only significant genes, sig.
+sig_exprs <- e[rownames(e) %in% as.character(sig$transcriptclusterid),]
+```
+
+## Plotting differential expression
+This example shows two representations of DEGs -- a **volcano plot** (logFC vs -log10(adjusted p.value)), and a heatmap (z-score scaled expression)
+
+Notice how for the volcano plot, we first plot all logFC and p-values and then use the abline and points functions to highlight those passing our thresholds.
+
+```{r volcano plot}
+# Create volcano plot for DEGs
+plot(top$logFC, -log10(top$adj.P.Val), pch='*', xlab="Log2 Fold Change", ylab="-10log(adjusted p-value)")
+abline(h=-log10(0.05), v=c(-1,1), col='red', lty=2)
+points(sig$logFC, -log10(sig$adj.P.Val), col='red', pch='*')
+```
+
+```{r fig.height=15, fig.width=5}
+heatmap.2(sig_exprs, trace='none', scale='row', col='redgreen', cexRow=0.2, cexCol=0.7)
+```
+

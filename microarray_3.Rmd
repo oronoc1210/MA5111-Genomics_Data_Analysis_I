@@ -1,0 +1,134 @@
+---
+title: "Replication of Microarray Analysis of BK Virus in Kidney Transplant Biopsies 3"
+author: "Conor O'Donoghue"
+date: "10/20/2020"
+output: html_document
+---
+
+# Setup
+
+Get to the same point in the analysis as last time
+
+```{r message=FALSE}
+library(oligo)
+library(pd.hugene.1.0.st.v1)
+library(hugene10sttranscriptcluster.db)
+library(limma)
+library(gplots)
+```
+
+```{r load data}
+pd <- read.AnnotatedDataFrame("~/BKV/pData.txt")
+celfiles <- paste('./', rownames(pd), sep="")
+rawData <- read.celfiles(celfiles, phenoData=pd)
+normData <- rma(rawData, target="core")
+```
+
+
+```{r get annotations}
+head(featureData(normData))
+featureData(normData) <- getNetAffx(normData, "transcript")
+head(featureData(normData))
+geneData <- normData[fData(normData)[,"category"] %in% "main",]
+```
+
+
+```{r QC plots}
+lab <- paste(pd$sampleID, pd$studyGroup)
+boxplot(rawData, target='core', main='Raw Data', ylab="log2(exprs)", names=lab, las=2)
+boxplot(geneData, main='Norm Data', ylab="log2(exprs)", names=lab, las=2)
+
+hist(geneData, main="Normalized expression density")
+
+heatmap.2(cor(exprs(geneData))^2, trace='none', scale='none', margins=c(9,9), labRow=lab, labCol=lab)
+
+colors <- as.numeric(factor(pd$studyGroup))+1
+plotMDS(geneData, labels=lab, col=colors)
+```
+
+```{r linear modelling}
+design <- cbind(
+  G1=as.numeric(pd$studyGroup=="G1"),
+  G2=as.numeric(pd$studyGroup=="G2")
+)
+
+aw <- arrayWeights(geneData, design)
+barplot(aw)
+fit <- lmFit(geneData, design, weight=aw)
+
+cm <- makeContrasts(G2-G1, levels=design)
+fit2 <- contrasts.fit(fit,cm)
+fit3 <- eBayes(fit2)
+```
+
+```{r write DEG_list}
+top <- topTable(fit3, coef=1, n=nrow(fit2))
+sig <- top[top$adj.P.Val <= 0.05 & abs(top$logFC) >=1,]
+
+write.table(sig, "DEG_list.csv", sep='\t', row.names=FALSE)
+
+e <- exprs(geneData)
+
+sig_exprs <- e[rownames(e) %in% as.character(sig$transcriptclusterid),]
+```
+
+```{r volcano plot}
+plot(top$logFC, -log10(top$adj.P.Val), pch='*', xlab="Log2 Fold Change", ylab="-10log(adjusted p-value)")
+abline(h=-log10(0.05), v=c(-1,1), col='red', lty=2)
+points(sig$logFC, -log10(sig$adj.P.Val), col='red', pch='*')
+```
+
+```{r fig.height=15, fig.width=5}
+heatmap.2(sig_exprs, trace='none', scale='row', col='redgreen', cexRow=0.2, cexCol=0.7)
+```
+
+# Exercise 3 -- Gene Ontology Enrichment
+Next we'll perform GO enrichment analysis using topGO package. Make sure you know what each line is doing.
+
+First, we're going to load some additional libraries.
+```{r message=FALSE}
+library(topGO)
+library(org.Hs.eg.db)
+library(Rgraphviz)
+```
+**topGO** is the package we use for performing the GO enrichment analysis.
+
+**org.Hs.eg.db** is an annotation database for the human genome.
+
+**Rgraphviz** is a package for plotting graphs (as in the data structure)
+
+
+Next, the topGO analysis.
+```{r topGO analysis}
+# we need a list of the significant genes and their adjusted p values for topGO.
+topGO_list <- sig$adj.P.Val
+names(topGO_list) <- sig$transcriptclusterid
+
+# Right now the names are cluster ids, we'd prefer to have the actual gene symbol.
+# grab vector of all sig ids from sig
+ids <- rownames(sig)
+# look up the symbols with the hugene10 data package.
+# we need to unlist because for some reason mget gives you a separate list for each id/pair symbol. Unlist will essentially get you your one big list of gene symbols, with ids as the index names.
+syms <- unlist(mget(ids, hugene10sttranscriptclusterSYMBOL, ifnotfound=NA))
+# names(syms), as said above, is a vector of the ids. So TGL is 
+TGL <- (topGO_list[names(syms)])
+names(TGL) <- syms
+
+# Run topGO analysis for Biological Process GO category
+GOdata <- new("topGOdata", ontology="BP", allGenes=TGL, geneSel=function(p) p<0.01, description="Test", annot=annFUN.org, mapping="org.Hs.eg", ID="Symbol")
+resultFisher <- runTest(GOdata, algorithm="classic", statistic="fisher")
+resultFisher
+```
+
+Next we want to display a table of the top 30 GO nodes.
+```{r xtable, results="asis"}
+library(xtable)
+tab<-xtable(GenTable(GOdata, classicFisher = resultFisher, topNodes = 30))
+print(tab, type="html")
+```
+
+```{r xtable GOgraph}
+# Plot the GO graph, color nodes by significance
+showSigOfNodes(GOdata, score(resultFisher), firstSigNodes=5, useInfo = "all")
+```
+

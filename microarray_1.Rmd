@@ -1,0 +1,195 @@
+---
+title: "Replication of Microarray Analysis of BK Virus in Kidney Transplant Biopsies"
+author: "Conor O'Donoghue"
+date: "10/19/2020"
+output: 
+  pdf_document:
+    toc:yes
+  html_document:
+     theme: united
+     toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Library loading
+There are a few libraries we need for microarray analysis. Adding the argument 'message=FALSE' to the R chunk will make it so that there's no output written to the html/pdf document when knitting.
+
+```{r message=FALSE}
+library(oligo)
+library(pd.hugene.1.0.st.v1)
+library(hugene10sttranscriptcluster.db)
+library(limma)
+library(gplots)
+```
+
+Remember: help() is for functions. To get the help page for an entire package, must use the argument package='example'.
+
+ex)
+help('oligo') or help(oligo) won't give you anything.
+help(package='oligo') will give you the help page for the oligo package.
+
+## Oligo
+Oligo is a set of tools to preprocess oligonucleotide arrays. Types: expression, tilling, SNP and exon chips. It supports manufacturers Affymetrix and NimbleGen. 
+When using additional packages, it offers support to large datasets and parallel execution of tasks.
+
+Oligo reads in raw intensity files (CEL for Affymetrix, XYS for NimbleGen), and performs analyses starting at the feature-level.
+
+To read the intensity files, you need data packages that contain the chip specific information (X/Y coordinates; feature types; sequence).
+
+This is actually what the **pd.hugene.1.0.st.v1** and **hugene10sttranscriptcluster.db** packages we loaded are -- annotation packages specific to our chip.
+
+### Important classes
+The assignment sheet suggests that there are two important R classes we'll want to know about when using Oligo.
+
+#### AnnotatedDataFrame
+Part of Biobase package.
+An annotated dataframe consists of two parts -- a collection of samples. and the values of variables measured on those samples. There is also a description of each value measured. The components of an AnnotatedDataFrame can be accessed with pData() and varMetadata().
+Essentially, it is what it sounds like. instead of a matrix of raw numbers, we have experiment metadata annotated into the table itself.
+
+#### ExpressionSet
+Another Biobase class.
+ExpressionSet is a container for high-throughput assays and experimental metadata. It's a direct extention of eSet(), and **requires** a matrix named exprs as an assayData member.
+
+## limma
+'linear models for microarrays'
+LIMMA is a library for the analysis of gene expression microarray data, esp linear models for designed experiments and assessment of differential expression. The linear model and DE functions in particular apply to all gene expression technologies, including microarrays, RNA-seq, and qPCR.
+
+## gplots
+Various tools for plotting data. Why not ggplot2? Probably heatmaps, as you can't plot clustering on heatmaps in ggplot2, which is essential for genomics analyses.
+
+# Reading in the data
+Here we want to read in our sample annotations and the raw CEL files. We want to be in the right directory with getwd() and setwd(), and then load the data in with the following r chunk.
+
+Note: outside of arguments like the last chunk, any comments you make in the R bracket will be the *name* of the chunk. So the below chunk is named 'load data'
+
+```{r load data}
+pd <- read.AnnotatedDataFrame("~/BKV/pData.txt")
+celfiles <- paste('./', rownames(pd), sep="")
+rawData <- read.celfiles(celfiles, phenoData=pd)
+normData <- rma(rawData, target="core")
+```
+
+What just happened?
+
+## AnnotatedDataFrame
+read.AnnotatedDataFrame() creates an AnnotatedDataFrame class from a file. Default sep is tab, header set to true, row names are the first column and var metadata set with the '#' character.
+
+Looking at the file 'pData.txt', column 1 will be the rownames, the first NON '#' line will be the headers (i.e. column names), and the '#' lines contain the metadata for the variables (column names).
+
+The AnnotatedDataFrame itself is an object. To set/retrieve the data in it, we need functions with it as the argument.
+The function 'pData()' will return the data in the dataframe, and the function varMetadata() will return the label descriptions. Each of these returns the data *as* as dataframe. sampleNames() or featureNames() (synonyms) will return the row names.
+
+```{r AnnotatedDataFrame example}
+pd
+pData(pd)
+varMetadata(pd)
+sampleNames(pd)
+```
+
+## paste()
+paste() is a function in the BiocGenerics package to concatenate vectors of strings. Here, since the filenames for each of our CEL files are named after our sample names (aka featureNames aka rownames), we're going to concatenate the sample names with './' to make it a file path, so that we can load them all together with the next function.
+
+## read.celfiles()
+This is how we load in all of our cel files into one object (of the GeneFeatureSet class to be specific -- another kind of class in oligo that is a bit less important to know the inner workings of because it doesn't let us mess with it outside of oligo functions).
+
+It takes a vector of file paths to our cel files as the single positional argument. We additionally want to pass in our sample metadata as 'phenoData'. I don't really know the difference between 'phenoData', 'featureData', 'experimentData', etc. Might be a good question for Pilib.
+
+Luckily we don't **need** to specify the oligo chip packages we need. We can, but it tries to do this automatically. If you investigate the object, you'll find that it already figured out that the annotation was 'pd.hugene.1.0.st.v1' without us having to tell it.
+
+```{r GeneFeatureSet example}
+rawData
+```
+
+# rma
+As we saw in lecture, we want to normalize the raw data first. RMA = robust multichip average, a kind of algorithm that subtracts the background (residuals from lecture, done via median-polish) and normalizes by quantiles.
+
+By default, background and normalize=TRUE, and subset is not. Target is normally 'core' by default (depends on what kind of object you're passing in -- here we're passing in a GeneFeatureSet for which target='core' by default, but we provide it here anyways). 'core' refers to summarizing at the 'core gene' level, as opposed to the 'probeset' level.
+
+When investigating normData, you should notice that there are  much fewer features.
+You can again use pData() to view the **phenotype** data (the sample data we provided via argument earlier), and fData() to view the **feature** data (here, that's the probeset ids).
+You can also access the expression data itself with the 'exprs()' function.
+
+```{r rma example}
+normData
+pData(normData)
+fData(normData)
+head(exprs(normData))
+```
+
+# Getting the annotations
+
+Really analyze the next chunk. What is getNetAffx doing? Why "transcript" option? Look at the feature data of normData to see why we need the second line.
+
+```{r get annotations}
+head(featureData(normData))
+featureData(normData) <- getNetAffx(normData, "transcript")
+head(featureData(normData))
+geneData <- normData[fData(normData)[,"category"] %in% "main",]
+```
+
+## featureData vs fData
+**featureData** returns an object containing information on both variable names and variable metadata. 
+
+**fDAta** returns a dataframe with features as rows, variables as columns
+
+Our normData has no features. So fData() returns a dataframe with as many rows as our expression data, but with no columns, and featureData() returns an empty object.
+
+```{r}
+rawData
+normData
+head(exprs(normData))
+head(fData(rawData))
+head(featureData(rawData))
+head(fData(normData))
+head(fData(geneData))
+```
+
+getNetAffx gets the biological annotations saved in the annotation package, we need to select 'probeset' or 'transcript' depending on what target we set for normalizing -- probeset or 'core'. Since we picked 'core' earlier, we pick 'transcript' here. We then assign this huge set of data to 'featureData' in our normData expressionset. Note that this will NOT work on the rawData object -- getNetAffx will do nothing because we haven't yet normalized! You'll get an error!
+
+The second line is creating a **subset** of normData, based on the featureData, where the value in the 'category' column is set to 'main', and naming this 'geneData'. Looking at the featureData in normData, other category names include 'normgene->exon' and 'normgene->intron'. Rather than looking at each individual intron or exon (our experiment wasn't set up to do this), we just want to look at the level of entire genes. Hence, we're subsetting our featureData to just include the genes, and not the individual introns and exons.
+
+# Plotting the data
+
+Lastly, we're going to try visualizing our data.
+
+```{r QC plots}
+lab <- paste(pd$sampleID, pd$studyGroup)
+boxplot(rawData, target='core', main='Raw Data', ylab="log2(exprs)", names=lab, las=2)
+boxplot(geneData, main='Norm Data', ylab="log2(exprs)", names=lab, las=2)
+
+hist(geneData, main="Normalized expression density")
+
+heatmap.2(cor(exprs(geneData))^2, trace='none', scale='none', margins=c(9,9), labRow=lab, labCol=lab)
+
+colors <- as.numeric(factor(pd$studyGroup))+1
+plotMDS(geneData, labels=lab, col=colors)
+```
+
+## Oligo boxplot
+Here, we're actually using boxplot from the oligo package. When giving data that is already normalized, we don't have to specify a target since it's already been specified when normalizing. But when plotting our raw data, we have to explicitly say that we want to target 'core' as opposed to 'probeset'.
+
+It knows where to find the expression data and to plot that instead of all the other kinds of data because it's an oligo function specifically to plot expression data. If we tried to plot the expression data using R's default boxplot function, we'd have to be a lot more specific and likley run into a lot more problems.
+
+hist() is also an oligo visualization function, but doesn't need talking about since it just takes normalized data as an input and does the rest.
+
+## heatmap.2
+cor() gives the correlations (R) for the entire CEL files compared to each other. We want to square it to get R^2. 
+
+The following is what cor() looks like.
+
+```{r}
+cor(exprs(geneData))
+```
+
+## plotMDS
+
+multidimensional scaling plot -- distances between gene expression profiles. 
+
+Plots samples on a 2D scatterplot so that distances on the plot approximate the log2 fold changes between the samples.
+
+ie) the farther away the samples are on the plot, the bigger the difference between typical log2 fold changes.
+
+Note on the neat color hack in the line before plotMDS -- we're taking the studyGroup factor (which is labelled as 0 or 1), turning it into numeric data, so that we can ADD to that number, and get different colors. In R numbers can also refer to colors if passed as the 'color' arg in visualization functions, but 0 means black. Here we change the numbers to 1 and 2 so that they're actual colors. The nice thing about this is if we have hundreds of samples and many more than 2 groups, we can easily handle the colors with very little code.
